@@ -1,0 +1,3 @@
+v 3
+d combineall: combine or convert every file in a directory, with vintage-aware harmonization
+p combineall

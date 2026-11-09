@@ -1,5 +1,5 @@
 *! combineall - Stata module to combine (append, merge, or joinby) or convert all files (.dta, ASCII, or Excel) in a directory
-*! v2.0.2 09nov2026 Eric A. Booth, Sr Researcher, Texas 2036 <eric.a.booth@gmail.com>
+*! v2.0.3 09nov2026 Eric A. Booth, Sr Researcher, Texas 2036 <eric.a.booth@gmail.com>
 *!                  Elizabeth Teas, Sr Research Scientist, Far Harbor, LLC <elizabeth@farharbor.com>
 *! first released 2011 (v1.0.0, April 2011, Eric A. Booth)
 *! v2.0.0 modernizes the 2011 engine (version 16 floor; import delimited and
@@ -13,11 +13,16 @@
 *! columns; for k <= 2 also an id-like leading token), an unmatched quote
 *! such as an inch mark joined rows, so combineall warns and uses loose
 *! binding.  Otherwise strict is kept silently.  strictquotes skips the rule.
+*! v2.0.3: a text file whose columns are all text keeps its header row as
+*! variable names (no more v1, v2, ... with the header as row 1); the
+*! documented abbreviation rep for replace works; the default output path has
+*! no doubled slash when directory() ends in /; the converted-files folder is
+*! printed as plain text instead of a {browse} link.
 
 cap program drop combineall
 program define combineall, rclass
 version 16
-syntax [using/] , [CMETHod(str asis) Directory(str asis) REPLace ///
+syntax [using/] , [CMETHod(str asis) Directory(str asis) REPlace ///
 	FILEtype(str asis) FILEID(str asis)  ///
 	MType(str asis) MVARs(str asis) _Merge  ///
 	DELIMiter(str asis) PREfix(str asis) SUFfix(str asis)   ///
@@ -33,7 +38,10 @@ syntax [using/] , [CMETHod(str asis) Directory(str asis) REPLace ///
 	if `"`directory'"' != "" loc directory: subinstr local directory `"""' "", all
 	**Target/Output File (using)**
 	if `"`using'"' == "" {
-		loc using "`directory'/combineall_output.dta"
+		**v2.0.3: no doubled slash when directory() ends in / or \**
+		loc _dsep "/"
+		if inlist(substr(`"`directory'"', -1, 1), "/", char(92)) loc _dsep ""
+		loc using "`directory'`_dsep'combineall_output.dta"
 		}
 	**v2: strip only a trailing .dta extension (the 2011 engine stripped
 	**every period, which mangled dotted directory names)**
@@ -279,6 +287,16 @@ preserve
 				* sign of a stray unmatched quote)
 				_cmb_qguard `"`directory'/`1'.`filetype'"', ///
 					asdouble `dddd' `strictquotes'
+				* (v2.0.3: when every column is text, import delimited
+				* cannot tell the header from data, names the variables
+				* v1, v2, ... and keeps the header as row 1; when every
+				* cell of that row is non-blank text that is not a
+				* number, the file is read again with varnames(1))
+				_cmb_hdrchk
+				if `cmb_hdr' {
+					_cmb_qguard `"`directory'/`1'.`filetype'"', ///
+						asdouble `dddd' `strictquotes' varnames(1) nowarn
+					}
 			}
 		**vintage-window renames + year stamp (harmonization layer)**
 		if `"`map'"' != "" {
@@ -409,7 +427,9 @@ if `"`cmethod'"' != "convertonly" {
 }
 
 **results window output**
-		noi di as txt as smcl `"Converted Files in Directory: {browse `"`directory'"'}"'
+		**v2.0.3: plain text; a {browse} link to a local folder can abort
+		**StataNow on macOS, and a browser is the wrong handler for a folder**
+		noi di as txt `"Converted Files in Directory: `directory'"'
 		if `"`cmethod'"' != "convertonly" noi di as txt as smcl `"Combined File: {stata desc using `"`using'.dta"':`using'.dta}"'
 
 **harmonization table: variable x years present (map only)**
@@ -480,6 +500,27 @@ restore
 end
 
 * ---------------------------------------------------------------------------
+* _cmb_hdrchk: header check for text files read with v1, v2, ... names
+* ---------------------------------------------------------------------------
+program define _cmb_hdrchk
+	* v2.0.3: c_local cmb_hdr 1 when the data are v1..vk, all string, with
+	* at least one row, and every cell of row 1 is non-blank, not a number
+	version 16
+	c_local cmb_hdr 0
+	if _N < 1 | c(k) < 1 exit
+	local j 0
+	foreach v of varlist _all {
+		local ++j
+		if "`v'" != "v`j'" exit
+		capture confirm string variable `v'
+		if _rc exit
+		if strtrim(`v'[1]) == "" exit
+		if !missing(real(strtrim(`v'[1]))) exit
+	}
+	c_local cmb_hdr 1
+end
+
+* ---------------------------------------------------------------------------
 * _cmb_qguard: import a delimited file under the stray-quote rule.  The same
 * helper, with the same logic, ships in combineall, cxchangelog and
 * convertanything (only the _cmb_ name prefix differs).
@@ -507,6 +548,7 @@ end
 * qg_nread (imports run, 1 or 2), qg_nstrict, qg_nloose, qg_k, qg_obs and
 * qg_var.  nowarn suppresses the warning (the caller prints its own).
 * ---------------------------------------------------------------------------
+
 program define _cmb_qguard
 	version 16
 	gettoken fname 0 : 0, parse(" ,")

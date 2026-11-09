@@ -1,5 +1,9 @@
-* test_combineall.do -- test battery for combineall v2.0.2
-* Run from any scratch directory:  stata-mp -b do test_combineall.do
+* test_combineall.do -- test battery for combineall v2.0.3
+* Run:  stata-mp -b do test_combineall.do ["/path/to/pkg" ["/work/dir"]]
+*   arg 1: folder holding combineall.ado (default: the working directory
+*          when it holds combineall.ado, else found on the adopath)
+*   arg 2: folder for the fixtures (default: c(tmpdir)); a subfolder
+*          combineall_test is created there and removed at the end
 * All paths live in globals set here; nothing below is hard-coded.
 
 clear all
@@ -7,10 +11,32 @@ set more off
 set seed 20260706
 
 * ------------------------------------------------------------------ *
-* Globals (edit these two lines only when the package moves)          *
+* Globals: package folder and scratch tree                            *
 * ------------------------------------------------------------------ *
-global pkgroot "/Users/ebooth/Documents/GitHub/Book Manuscript:Applied Evaluation-Stata/combineall-stata-public"
-global T "`c(tmpdir)'/combineall_test"
+global pkgroot ""
+if `"`1'"' != "" global pkgroot `"`1'"'
+if `"$pkgroot"' == "" {
+    capture confirm file "`c(pwd)'/combineall.ado"
+    if !_rc global pkgroot `"`c(pwd)'"'
+}
+if `"$pkgroot"' == "" {
+    capture findfile combineall.ado
+    if !_rc {
+        local fp `"`r(fn)'"'
+        local s = max(strrpos(`"`fp'"', "/"), strrpos(`"`fp'"', "\"))
+        if `s' > 1 global pkgroot = substr(`"`fp'"', 1, `s' - 1)
+    }
+}
+if `"$pkgroot"' == "" {
+    di as err "test_combineall: cannot locate combineall.ado; pass its folder as argument 1"
+    exit 601
+}
+confirm file "$pkgroot/combineall.ado"
+local work `"`2'"'
+if `"`work'"' == "" local work `"`c(tmpdir)'"'
+mata: st_local("work", subinstr(st_local("work"), char(92), "/"))
+if substr(`"`work'"', -1, 1) == "/" local work = substr(`"`work'"', 1, strlen(`"`work'"') - 1)
+global T "`work'/combineall_test"
 
 * ++ prepends: the packaged v2.0.0 must shadow any older combineall
 * (e.g., a 2011 copy in the PERSONAL ado path)
@@ -373,7 +399,7 @@ end
 * The helper is private to combineall.ado; running the file defines it
 * for this do-file (discard first, so nothing is defined twice)
 discard
-capture program drop combineall _cmb_qguard
+capture program drop combineall _cmb_qguard _cmb_hdrchk
 quietly run "$pkgroot/combineall.ado"
 
 local ls0 = c(linesize)
@@ -568,10 +594,63 @@ assert r(hits) == 1
 set linesize `ls0'
 
 * ------------------------------------------------------------------ *
+* 10h. v2.0.3: all-text columns keep their header row; a header-less  *
+*      numeric file still reads as v1, v2, ...; rep abbreviates       *
+*      replace; the default output path has no doubled slash          *
+* ------------------------------------------------------------------ *
+capture mkdir "$T/hdr"
+capture mkdir "$T/hdrn"
+file open fh using "$T/hdr/a_2019.csv", write replace text
+file write fh "name,city" _n "ann,austin" _n
+file close fh
+file open fh using "$T/hdr/b_2020.csv", write replace text
+file write fh "name,city" _n "bob,waco" _n
+file close fh
+combineall using "$T/out/hdr", cmethod(append) directory("$T/hdr") replace
+use "$T/out/hdr.dta", clear
+assert _N == 2
+confirm string variable name city
+assert inlist(name, "ann", "bob")
+* map() renames now match an all-text header
+file open fh using "$T/hdrmap.csv", write replace text
+file write fh "oldname,newname,firstyear,lastyear" _n "city,town,2020," _n
+file close fh
+combineall using "$T/out/hdrm", cmethod(append) directory("$T/hdr") ///
+    map("$T/hdrmap.csv") replace
+use "$T/out/hdrm.dta", clear
+assert _N == 2
+assert town == "waco" if year == 2020
+assert city == "austin" if year == 2019
+* rep is the documented abbreviation of replace
+combineall using "$T/out/hdr", cmethod(append) directory("$T/hdr") rep
+assert r(n_files) == 2
+* a header-less all-number file still reads as data
+file open fh using "$T/hdrn/n_2019.csv", write replace text
+file write fh "1,2" _n "3,4" _n
+file close fh
+combineall using "$T/out/hdrn", cmethod(append) directory("$T/hdrn") replace
+use "$T/out/hdrn.dta", clear
+assert _N == 2
+confirm numeric variable v1 v2
+* a header-only all-text file gives names and no rows
+file open fh using "$T/hdrn/h_2020.csv", write replace text
+file write fh "alpha,beta" _n
+file close fh
+combineall using "$T/out/hdrn2", cmethod(convertonly) directory("$T/hdrn") ///
+    filetype(csv)
+use "$T/hdrn/h_2020.dta", clear
+assert _N == 0
+confirm variable alpha beta
+* default output: directory() with a trailing slash, no doubled slash
+combineall, cmethod(append) directory("$T/hdr/")
+assert strpos(`"`r(output)'"', "//") == 0
+confirm file "$T/hdr/combineall_output.dta"
+
+* ------------------------------------------------------------------ *
 * 11. Clean up the scratch tree                                       *
 * ------------------------------------------------------------------ *
 clear
-foreach sub in conv dtaapp data pos mrg out bad tok tok2 ts ml sq both tab k2 {
+foreach sub in conv dtaapp data pos mrg out bad tok tok2 ts ml sq both tab k2 hdr hdrn {
     local stale : dir "$T/`sub'" files "*"
     foreach f of local stale {
         erase "$T/`sub'/`f'"

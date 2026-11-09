@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 2.0.2  09nov2026}{...}
+{* *! version 2.0.3  09nov2026}{...}
 {viewerjumpto "Syntax" "combineall##syntax"}{...}
 {viewerjumpto "Description" "combineall##description"}{...}
 {viewerjumpto "Engine options" "combineall##engine"}{...}
@@ -9,7 +9,7 @@
 {viewerjumpto "Examples" "combineall##examples"}{...}
 {viewerjumpto "Remarks and limits" "combineall##remarks"}{...}
 {hline}
-help for {hi:combineall}{right:v2.0.2}
+help for {hi:combineall}{right:v2.0.3}
 {hline}
 
 {title:Title}
@@ -158,7 +158,14 @@ unrecognized extension are read with {help import delimited}
 ({cmd:bindquote(strict)}, so a quoted field that contains a line break,
 such as a free-text survey answer, stays in one cell; v2.0.1 and earlier
 split such a field into extra rows; see {opt strictquotes} for the
-stray-quote rule);
+stray-quote rule).  The first row holds variable names when some column
+below it holds numbers.  When every column is text, {help import delimited}
+cannot tell names from data on its own; {cmd:combineall} then uses the first
+row as variable names when every cell of that row is non-blank text that is
+not a number (v2.0.2 and earlier named such columns {cmd:v1}, {cmd:v2}, ...
+and kept the header as the first observation).  A text file with no header
+row whose first row is all text is read the same way, so give it a header
+row;
 {cmd:xlsx}/{cmd:xls} with {help import excel} ({cmd:firstrow});
 {cmd:xml} with {help xmluse}; {cmd:dta} with {help use}.  (v1.0.0 used
 {cmd:insheet} and read {cmd:xls} as text; v2.0.0 reads Excel properly.)

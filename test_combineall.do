@@ -1,4 +1,4 @@
-* test_combineall.do -- test battery for combineall v2.0.1
+* test_combineall.do -- test battery for combineall v2.0.2
 * Run from any scratch directory:  stata-mp -b do test_combineall.do
 * All paths live in globals set here; nothing below is hard-coded.
 
@@ -21,7 +21,7 @@ which combineall
 * 0. Build a clean scratch tree under the system tempdir              *
 * ------------------------------------------------------------------ *
 capture mkdir "$T"
-foreach sub in conv dtaapp data pos mrg out bad tok tok2 ts {
+foreach sub in conv dtaapp data pos mrg out bad tok tok2 ts ml sq both tab k2 {
     capture mkdir "$T/`sub'"
     local stale : dir "$T/`sub'" files "*"
     foreach f of local stale {
@@ -353,10 +353,225 @@ confirm file "c3.dta"
 cd "`cwd'"
 
 * ------------------------------------------------------------------ *
+* 10b-10g. The stray-quote rule (v2.0.2).  Delimited files are read  *
+*      with bindquote(strict).  When a cell has a line break and a    *
+*      later line of that cell looks like a data row (at least k-1    *
+*      delimiters; for k <= 2 also an id-like leading token), a stray *
+*      quote joined rows: combineall warns and uses loose binding.    *
+*      Otherwise strict is kept silently.  The checks read warnings   *
+*      from text logs and call the private helper _cmb_qguard to      *
+*      count imports (r-free: it leaves qg_* locals).                 *
+* ------------------------------------------------------------------ *
+capture program drop _ca_countin
+program define _ca_countin, rclass
+    args fn needle
+    mata: st_numscalar("r(hits)", ///
+        sum(strpos(cat(st_local("fn")), st_local("needle")) :> 0))
+    return scalar hits = r(hits)
+end
+
+* The helper is private to combineall.ado; running the file defines it
+* for this do-file (discard first, so nothing is defined twice)
+discard
+capture program drop combineall _cmb_qguard
+quietly run "$pkgroot/combineall.ado"
+
+local ls0 = c(linesize)
+set linesize 255                  // keep each warning line on one log line
+
+* 10b. A legitimate multi-line survey answer stays one row by default,
+*      with no warning and one import.  Without bindquote(strict) the row
+*      split in two, the header became data, and the variables came back
+*      as v1 v2.
+clear
+set obs 3
+gen int id = _n
+gen str80 comment = "first answer"
+replace comment = "line one" + char(10) + "line two, and more" in 2
+replace comment = "third answer" in 3
+export delimited using "$T/ml/survey_2021.csv", quote replace
+quietly import delimited using "$T/ml/survey_2021.csv", asdouble clear
+assert _N > 3                        // loose binding splits the answer
+quietly log using "$T/out/w_ml.log", text replace name(wml)
+combineall using "$T/out/ml", cmethod(append) directory("$T/ml") replace
+quietly log close wml
+use "$T/out/ml.dta", clear
+assert _N == 3
+confirm variable id comment
+assert comment[2] == "line one" + char(10) + "line two, and more"
+assert comment[3] == "third answer"
+_ca_countin "$T/out/w_ml.log" "warning:"
+assert r(hits) == 0
+_cmb_qguard "$T/ml/survey_2021.csv", asdouble delimiters(",")
+assert "`qg_status'" == "multiline" & `qg_nread' == 1 & _N == 3
+* strictquotes gives the same result; strictq is the minimum
+* abbreviation; strict alone still means strict (which requires map())
+combineall using "$T/out/ml", cmethod(append) directory("$T/ml") ///
+    strictq replace
+use "$T/out/ml.dta", clear
+assert _N == 3
+capture combineall using "$T/out/ml", cmethod(append) directory("$T/ml") ///
+    strict replace
+assert _rc == 198
+
+* 10c. A stray unmatched quote (an inch mark).  Strict binding alone
+*      folds rows 2-3 into one cell (_N 3 -> 1); the rule finds data-row
+*      lines inside that cell, warns, and keeps the three loose rows.
+file open fh using "$T/sq/inch_2020.csv", write replace text
+file write fh "id,desc,n" _n
+file write fh `"1,5" screen,10"' _n
+file write fh "2,ok,20" _n
+file write fh "3,fine,30" _n
+file close fh
+quietly import delimited using "$T/sq/inch_2020.csv", ///
+    bindquote(strict) maxquotedrows(unlimited) clear
+assert _N == 1                       // the failure the rule exists for
+quietly log using "$T/out/w_sq.log", text replace name(wsq)
+combineall using "$T/out/sq", cmethod(append) directory("$T/sq") replace
+quietly log close wsq
+use "$T/out/sq.dta", clear
+assert _N == 3
+assert id == _n
+* rows 2-3 are intact; loose binding runs the stray-quote cell to the end
+* of its own line, so that one line still needs repair upstream
+assert n[2] == 20 & n[3] == 30
+assert desc[2] == "ok" & desc[3] == "fine"
+assert desc[1] == `"5" screen,10"' & missing(n[1])
+_ca_countin "$T/out/w_sq.log" "warning:"
+assert r(hits) == 1
+_ca_countin "$T/out/w_sq.log" "stray-quote check on file $T/sq/inch_2020.csv"
+assert r(hits) == 1
+_ca_countin "$T/out/w_sq.log" "In the strict read, the quoted cell in row 1, column desc runs on into lines"
+assert r(hits) == 1
+_ca_countin "$T/out/w_sq.log" "strict quote binding read 1 row(s); loose binding read 3 row(s); using the loose result."
+assert r(hits) == 1
+quietly _cmb_qguard "$T/sq/inch_2020.csv", asdouble delimiters(",") nowarn
+assert "`qg_status'" == "stray" & `qg_nread' == 2 & _N == 3
+assert "`qg_obs'" == "1" & "`qg_var'" == "desc"
+assert `qg_nstrict' == 1 & `qg_nloose' == 3
+* strictquotes forces strict binding with no fallback (the swallowed result)
+quietly log using "$T/out/w_sq2.log", text replace name(wsq2)
+combineall using "$T/out/sq", cmethod(append) directory("$T/sq") ///
+    strictquotes replace
+quietly log close wsq2
+use "$T/out/sq.dta", clear
+assert _N == 1
+_ca_countin "$T/out/w_sq2.log" "warning:"
+assert r(hits) == 0
+
+* 10d. A clean file (no line break in any cell): no warning, and the
+*      fast path imports it once
+quietly log using "$T/out/w_ok.log", text replace name(wok)
+combineall using "$T/out/ok", cmethod(append) directory("$T/conv") replace
+quietly log close wok
+_ca_countin "$T/out/w_ok.log" "warning:"
+assert r(hits) == 0
+local okf : dir "$T/conv" files "*.csv"
+gettoken okf : okf
+_cmb_qguard "$T/conv/`okf'", asdouble delimiters(",")
+assert "`qg_status'" == "clean" & `qg_nread' == 1
+
+* 10e. Both in one file: a stray quote and a legitimate quoted line break.
+*      Documented rule: the stray-quote warning wins, so the loose result
+*      is kept (the multi-line answer splits too); strictquotes keeps the
+*      strict result.  Neither is right: such a file must be fixed upstream.
+file open fh using "$T/both/mix_2021.csv", write replace text
+file write fh "id,desc,n" _n
+file write fh `"1,"line one"' _n
+file write fh `"line two",10"' _n
+file write fh `"2,5" screen,20"' _n
+file write fh "3,fine,30" _n
+file write fh "4,ok,40" _n
+file close fh
+quietly import delimited using "$T/both/mix_2021.csv", asdouble clear
+local nloose = _N
+quietly import delimited using "$T/both/mix_2021.csv", asdouble ///
+    bindquote(strict) maxquotedrows(unlimited) clear
+local nstrict = _N
+assert `nloose' > `nstrict'
+quietly log using "$T/out/w_both.log", text replace name(wboth)
+combineall using "$T/out/both", cmethod(append) directory("$T/both") replace
+quietly log close wboth
+use "$T/out/both.dta", clear
+assert _N == `nloose'
+_ca_countin "$T/out/w_both.log" "warning:"
+assert r(hits) == 1
+_ca_countin "$T/out/w_both.log" "In the strict read, the quoted cell in row 2, column desc"
+assert r(hits) == 1
+_ca_countin "$T/out/w_both.log" "strict quote binding read `nstrict' row(s); loose binding read `nloose' row(s)"
+assert r(hits) == 1
+combineall using "$T/out/both", cmethod(append) directory("$T/both") ///
+    strictquotes replace
+use "$T/out/both.dta", clear
+assert _N == `nstrict'
+
+* 10f. Tab-delimited variants (filetype(txt) delimiter(tab)).  A tab file's
+*      multi-line answer with commas stays one row; a stray inch mark warns.
+file open fh using "$T/tab/ml_2021.txt", write replace text
+file write fh "id" _tab "comment" _tab "n" _n
+file write fh "1" _tab `""one, two, three"' _n
+file write fh `"four, five, six""' _tab "10" _n
+file write fh "2" _tab "ok" _tab "20" _n
+file close fh
+quietly log using "$T/out/w_tab.log", text replace name(wtab)
+combineall using "$T/out/tab", cmethod(append) directory("$T/tab") ///
+    filetype(txt) delimiter(tab) replace
+quietly log close wtab
+use "$T/out/tab.dta", clear
+assert _N == 2
+assert comment[1] == "one, two, three" + char(10) + "four, five, six"
+_ca_countin "$T/out/w_tab.log" "warning:"
+assert r(hits) == 0
+erase "$T/tab/ml_2021.txt"
+file open fh using "$T/tab/inch_2020.txt", write replace text
+file write fh "id" _tab "desc" _tab "n" _n
+file write fh "1" _tab `"5" screen"' _tab "10" _n
+file write fh "2" _tab "ok" _tab "20" _n
+file write fh "3" _tab "fine" _tab "30" _n
+file close fh
+quietly log using "$T/out/w_tab2.log", text replace name(wtab2)
+combineall using "$T/out/tab", cmethod(append) directory("$T/tab") ///
+    filetype(txt) delimiter(tab) replace
+quietly log close wtab2
+use "$T/out/tab.dta", clear
+assert _N == 3 & n[3] == 30
+_ca_countin "$T/out/w_tab2.log" "strict quote binding read 1 row(s); loose binding read 3 row(s)"
+assert r(hits) == 1
+
+* 10g. Two columns (k = 2): a later line needs an id-like leading token
+*      as well as one delimiter.  Free text with a comma stays one cell;
+*      a stray quote that swallows "2,ok" rows is caught.
+file open fh using "$T/k2/ml_2021.csv", write replace text
+file write fh "id,comment" _n
+file write fh `"1,"we waited"' _n
+file write fh `"2 weeks, then left""' _n
+file write fh "2,ok" _n
+file close fh
+combineall using "$T/out/k2", cmethod(append) directory("$T/k2") replace
+use "$T/out/k2.dta", clear
+assert _N == 2
+assert comment[1] == "we waited" + char(10) + "2 weeks, then left"
+erase "$T/k2/ml_2021.csv"
+file open fh using "$T/k2/inch_2020.csv", write replace text
+file write fh "id,comment" _n
+file write fh `"1,5" screen"' _n
+file write fh "2,ok" _n
+file write fh "3,fine" _n
+file close fh
+quietly log using "$T/out/w_k2.log", text replace name(wk2)
+combineall using "$T/out/k2", cmethod(append) directory("$T/k2") replace
+quietly log close wk2
+use "$T/out/k2.dta", clear
+assert _N == 3
+_ca_countin "$T/out/w_k2.log" "strict quote binding read 1 row(s); loose binding read 3 row(s)"
+assert r(hits) == 1
+set linesize `ls0'
+
+* ------------------------------------------------------------------ *
 * 11. Clean up the scratch tree                                       *
 * ------------------------------------------------------------------ *
 clear
-foreach sub in conv dtaapp data pos mrg out bad tok tok2 ts {
+foreach sub in conv dtaapp data pos mrg out bad tok tok2 ts ml sq both tab k2 {
     local stale : dir "$T/`sub'" files "*"
     foreach f of local stale {
         erase "$T/`sub'/`f'"

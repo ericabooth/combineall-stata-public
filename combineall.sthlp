@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 2.0.1  30jul2026}{...}
+{* *! version 2.0.2  09nov2026}{...}
 {viewerjumpto "Syntax" "combineall##syntax"}{...}
 {viewerjumpto "Description" "combineall##description"}{...}
 {viewerjumpto "Engine options" "combineall##engine"}{...}
@@ -9,7 +9,7 @@
 {viewerjumpto "Examples" "combineall##examples"}{...}
 {viewerjumpto "Remarks and limits" "combineall##remarks"}{...}
 {hline}
-help for {hi:combineall}{right:v2.0.1}
+help for {hi:combineall}{right:v2.0.2}
 {hline}
 
 {title:Title}
@@ -51,6 +51,7 @@ optional, so a bare {cmd:combineall} is legal: it converts every
 {synopt :{cmdab:file:type(}{it:ext}{cmd:)}}extension of the input files: {cmd:csv} (default), {cmd:dta}, {cmd:txt}, {cmd:xlsx}, {cmd:xls}, {cmd:xml}, or any text extension{p_end}
 {synopt :{cmdab:fileid:(}{it:newvar}{cmd:)}}create {it:newvar} holding each observation's source filename{p_end}
 {synopt :{cmdab:delim:iter(}{it:char}{cmd:)}}{cmd:comma} (default), {cmd:tab}, or a delimiter character such as {cmd:";"}{p_end}
+{synopt :{cmdab:strictq:uotes}}skip the stray-quote rule: keep strict quote binding, no fallback{p_end}
 {synopt :{cmdab:pre:fix(}{it:string}{cmd:)}}{it:string} added to the beginning of each converted filename{p_end}
 {synopt :{cmdab:suf:fix(}{it:string}{cmd:)}}{it:string} added to the end of each converted filename{p_end}
 {synopt :{cmdab:tostr:ing}}{help tostring} every variable during conversion, using each variable's display format (lossy for numerics){p_end}
@@ -153,7 +154,11 @@ passes through, for example {cmd:unmatched(both)} for {cmd:joinby}.
 {phang}
 {opt filetype(ext)} sets which files are swept up, by extension.
 {cmd:csv} (default), {cmd:txt}, {cmd:raw}, {cmd:out}, {cmd:log}, and any
-unrecognized extension are read with {help import delimited};
+unrecognized extension are read with {help import delimited}
+({cmd:bindquote(strict)}, so a quoted field that contains a line break,
+such as a free-text survey answer, stays in one cell; v2.0.1 and earlier
+split such a field into extra rows; see {opt strictquotes} for the
+stray-quote rule);
 {cmd:xlsx}/{cmd:xls} with {help import excel} ({cmd:firstrow});
 {cmd:xml} with {help xmluse}; {cmd:dta} with {help use}.  (v1.0.0 used
 {cmd:insheet} and read {cmd:xls} as text; v2.0.0 reads Excel properly.)
@@ -165,6 +170,53 @@ source filename, for example {cmd:enr_2019.csv}.
 {phang}
 {opt delimiter(char)} sets the text delimiter: {cmd:comma} (default),
 {cmd:tab}, or a character such as {cmd:";"}.
+
+{phang}
+{opt strictquotes} skips the stray-quote rule for delimited text: each file
+is read with {cmd:bindquote(strict)}, with no check and no fallback to loose
+binding.  It applies to every delimited file in the run and to the
+{cmd:map()} CSV.
+
+{pstd}
+{bf:The stray-quote rule.}  Delimited text (and the {cmd:map()} CSV) is read
+once with {cmd:bindquote(strict)}, so a quoted field may contain the
+delimiter or a line break and stays one cell.  Strict binding also treats one
+unmatched double quote, such as the inch mark in {cmd:1,5" screen,10}, as the
+start of a quoted field, so the rows after it can fold into a single cell with
+no error.  Unless {opt strictquotes} is given, {cmd:combineall} checks the
+strict result:
+
+{p 8 10 2}
+o  If no string cell contains a line break, the strict result is kept.  The
+file is read once and nothing is printed.{p_end}
+{p 8 10 2}
+o  Otherwise each cell that contains a line break is split at its line
+breaks.  A line after the first {it:looks like a data row} when it holds at
+least {it:k}-1 delimiters, where {it:k} is the number of columns of the strict
+read and the delimiter is the one set by {opt delimiter()}.  When {it:k} <= 2
+that test is too weak, so the line must also start with an id-like token
+(digits, optionally after up to four letters and a {cmd:_} or {cmd:-}, such as
+{cmd:17}, {cmd:Q12}, {cmd:id_003}, or {cmd:2024-001}), and the first column of
+the file must hold such values.{p_end}
+{p 8 10 2}
+o  If any line looks like a data row, a stray quote joined rows.
+{cmd:combineall} prints a warning that names the file, the row and column of
+the strict read where the joined cell starts, and the strict and loose row
+counts, then reads the file again with the default loose binding and keeps
+that result.  Every row survives, but the cell that holds the stray quote runs
+to the end of its line, so repair that line upstream.{p_end}
+{p 8 10 2}
+o  If no line looks like a data row, the line breaks are genuine multi-line
+text, such as a free-text survey answer: the strict result is kept and nothing
+is printed.{p_end}
+
+{pstd}
+A file with both a genuine multi-line field and a stray quote gets the warning
+and the loose result: the stray-quote reading wins, so the multi-line field
+splits too.  Repair the stray quote upstream.  A genuine multi-line field whose
+later line happens to hold {it:k}-1 delimiters (for example, a second line with
+two commas in a three-column file) is also read as a stray quote; specify
+{opt strictquotes} for such a file.
 
 {phang}
 {opt prefix(string)} and {opt suffix(string)} decorate the converted

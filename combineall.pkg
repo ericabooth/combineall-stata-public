@@ -13,7 +13,7 @@ d [firstyear,lastyear] window covers the 4-digit year extracted
 d from each filename, generates int year, records provenance in
 d char varname[source], and prints a variable-by-year
 d harmonization table.  strict turns absent-oldname reports into
-d errors.  Replaces the panelstack package.
+d errors.
 d
 d   combineall using "built/panel", cmethod(append) map(renames.csv)
 d
@@ -32,7 +32,7 @@ d
 d Authors: Eric A. Booth, Sr Researcher, Texas 2036
 d          Elizabeth Teas, Sr Research Scientist, Far Harbor, LLC
 d Support: eric.a.booth@gmail.com
-d Distribution-Date: 20261109
+d Distribution-Date: 20261114
 d
 f combineall.ado
 f combineall.sthlp
